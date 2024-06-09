@@ -3,15 +3,39 @@ Some example classes for people who want to create a homemade bot.
 
 With these classes, bot makers will not have to implement the UCI or XBoard interfaces themselves.
 """
+import os
 import chess
+import chess.syzygy
+import chess.polyglot
 from chess.engine import PlayResult, Limit
 import random
 from lib.engine_wrapper import MinimalEngine
 from lib.types import MOVE, HOMEMADE_ARGS_TYPE
 import logging
 
-MAX, MIN = 100000, -100000
-max_depth = 4
+# Initialize Syzygy tablebases
+tablebase = chess.syzygy.Tablebase()
+
+# Directory containing the Polyglot books
+polyglot_directory = 'polyglot-collection'
+polyglot_filenames = [
+    'Perfect2023.bin', 'Titans.bin', 'Book.bin', 'book2.bin', 'codekiddy.bin', 'baron30.bin',
+    'DCbook_large.bin', 'Elo2400.bin', 'final-book.bin', 'gm2001.bin',
+    'gm2600.bin', 'human.bin', 'komodo.bin', 'KomodoVariety.bin', 'Performance.bin', 'varied.bin'
+]
+polyglot_books = [os.path.join(polyglot_directory, filename) for filename in polyglot_filenames]
+
+def get_book_move(board):
+    for book_filename in polyglot_books:
+        try:
+            with chess.polyglot.open_reader(book_filename) as reader:
+                entry = reader.find(board)
+                return entry.move
+        except (KeyError, IndexError):
+            continue
+    return None
+
+MAX, MIN = 10000, -10000
 
 piece_square_table = {
     chess.PAWN: [
@@ -76,35 +100,6 @@ piece_square_table = {
     ]
 }
 
-def get_piece_value(piece):
-    values = {
-        chess.PAWN: 100,
-        chess.KNIGHT: 320,
-        chess.BISHOP: 330,
-        chess.ROOK: 500,
-        chess.QUEEN: 900,
-        chess.KING: 20000
-    }
-    return values[piece.piece_type] if piece.color == chess.WHITE else -values[piece.piece_type]
-
-
-def evaluate_board(board):
-    if board.is_checkmate():
-        return MIN if board.turn else MAX
-
-    material = 0
-    positional = 0
-    for square, piece in board.piece_map().items():
-        piece_value = get_piece_value(piece)
-        material += piece_value
-
-        row, col = divmod(square, 8)
-        positional_value = piece_square_table[piece.piece_type][row][col]
-        positional += positional_value if piece.color == chess.WHITE else -positional_value
-
-    eval_value = material + positional
-    return eval_value
-
 def minimax(depth, maximizingPlayer, alpha, beta, board):
     if depth == 0 or board.is_game_over():
         eval_value = evaluate_board(board)
@@ -137,6 +132,70 @@ def minimax(depth, maximizingPlayer, alpha, beta, board):
             if beta <= alpha:
                 break
     return best, best_move
+
+def evaluate_board(board):
+    if board.is_checkmate():
+        return MIN if board.turn else MAX
+
+    # Check for endgame using Syzygy tablebases
+    with tablebase:
+        if not (board.has_castling_rights(chess.WHITE) or board.has_castling_rights(chess.BLACK) or board.has_legal_en_passant()):
+            try:
+                wdl = tablebase.probe_wdl(board)
+                if wdl is not None:
+                    print("Syzygy tablebase used for evaluation.")
+                    return wdl * MAX  # Scale the WDL result to a large value
+            except KeyError:
+                pass
+    
+    material = sum(get_piece_value(piece) for piece in board.piece_map().values())
+    positional = sum(piece_square_table[piece.piece_type][square // 8][square % 8] * (1 if piece.color == chess.WHITE else -1) for square, piece in board.piece_map().items())
+    
+    # Add a bonus for pawn advancement in the endgame
+    if len(board.piece_map()) <= 10:  # Endgame condition
+        pawn_bonus = 0
+        for square, piece in board.piece_map().items():
+            if piece.piece_type == chess.PAWN:
+                rank = chess.square_rank(square)
+                if piece.color == chess.WHITE:
+                    pawn_bonus += (rank * 10)  # Reward for advancing pawns
+                else:
+                    pawn_bonus -= ((7 - rank) * 10)
+        return material + positional + pawn_bonus
+    
+    return material + positional
+
+def get_piece_value(piece):
+    values = {
+        chess.PAWN: 100,
+        chess.KNIGHT: 320,
+        chess.BISHOP: 330,
+        chess.ROOK: 500,
+        chess.QUEEN: 900,
+        chess.KING: 20000
+    }
+    return values[piece.piece_type] if piece.color == chess.WHITE else -values[piece.piece_type]
+
+def order_moves(board):
+    """
+    Order the moves based on their priority: captures, checks, promotions, and then quiet moves.
+    """
+    move_scores = []
+    for move in board.legal_moves:
+        if board.gives_check(move):
+            score = 50  # Arbitrary score for checks
+        elif move.promotion:
+            score = 75  # Arbitrary score for promotions
+        else:
+            score = 10  # Lower score for quiet moves
+        move_scores.append((score, move))
+
+    # Sort moves by their scores in descending order
+    move_scores.sort(reverse=True, key=lambda x: x[0])
+    ordered_moves = [move for score, move in move_scores]
+
+    return ordered_moves
+max_depth = 4
 
 # Use this logger variable to print messages to the console or log files.
 # logger.info("message") will always print "message" to the console or log file.
