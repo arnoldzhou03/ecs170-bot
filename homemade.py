@@ -100,40 +100,67 @@ piece_square_table = {
     ]
 }
 
-def minimax(depth, maximizingPlayer, alpha, beta, board):
+positions_evaluated = 0
+
+def iterative_deepening(maximizingPlayer, board):
+    global positions_evaluated
+    positions_evaluated = 0
+    # Initial move order
+    move_order = list(board.legal_moves)
+    best_move = None
+    for i in range(1, max_depth + 1):
+        _, best_move, move_order = minimax(i, maximizingPlayer, MIN, MAX, board, move_order)
+    return best_move
+
+def minimax(depth, maximizingPlayer, alpha, beta, board, move_order):
     if depth == 0 or board.is_game_over():
         eval_value = evaluate_board(board)
-        return eval_value, None
+        return eval_value, None, move_order
 
     best_move = None
+    pruning = False
+    move_evals = []
 
     if maximizingPlayer:
         best = MIN
-        for move in board.legal_moves:
+        for move in move_order:
+            if pruning:
+                move_evals.append((MIN, move))
+                continue
             board.push(move)
-            val, _ = minimax(depth - 1, False, alpha, beta, board)
+            val, _, _ = minimax(depth - 1, False, alpha, beta, board, list(board.legal_moves))
             board.pop()
+            move_evals.append((val, move))
             if val > best:
                 best = val
                 best_move = move
             alpha = max(alpha, best)
             if beta <= alpha:
-                break
+                pruning = True
     else:
         best = MAX
-        for move in board.legal_moves:
+        for move in move_order:
+            if pruning:
+                move_evals.append((MAX, move))
+                continue
             board.push(move)
-            val, _ = minimax(depth - 1, True, alpha, beta, board)
+            val, _, _ = minimax(depth - 1, True, alpha, beta, board, list(board.legal_moves))
             board.pop()
+            move_evals.append((val, move))
             if val < best:
                 best = val
                 best_move = move
             beta = min(beta, best)
             if beta <= alpha:
-                break
-    return best, best_move
+                pruning = True
+    
+    move_evals.sort(reverse=maximizingPlayer, key = lambda x: x[0])
+    sorted_moves = [move for _, move in move_evals]
+    return best, best_move, sorted_moves
 
 def evaluate_board(board):
+    global positions_evaluated
+    positions_evaluated += 1
     if board.is_checkmate():
         return MIN if board.turn else MAX
 
@@ -176,25 +203,6 @@ def get_piece_value(piece):
     }
     return values[piece.piece_type] if piece.color == chess.WHITE else -values[piece.piece_type]
 
-def order_moves(board):
-    """
-    Order the moves based on their priority: captures, checks, promotions, and then quiet moves.
-    """
-    move_scores = []
-    for move in board.legal_moves:
-        if board.gives_check(move):
-            score = 50  # Arbitrary score for checks
-        elif move.promotion:
-            score = 75  # Arbitrary score for promotions
-        else:
-            score = 10  # Lower score for quiet moves
-        move_scores.append((score, move))
-
-    # Sort moves by their scores in descending order
-    move_scores.sort(reverse=True, key=lambda x: x[0])
-    ordered_moves = [move for score, move in move_scores]
-
-    return ordered_moves
 max_depth = 4
 
 # Use this logger variable to print messages to the console or log files.
@@ -207,7 +215,10 @@ logger = logging.getLogger(__name__)
 class ECS170Engine(MinimalEngine):
 
     def search(self, board: chess.Board, *args: HOMEMADE_ARGS_TYPE) -> PlayResult:
-        _, best_move = minimax(max_depth, board.turn, MIN, MAX, board)
+        global positions_evaluated
+        best_move = iterative_deepening(board.turn, board)
+        print(f"Positions evaluated: {positions_evaluated}")
+        # _, best_move = minimax(max_depth, board.turn, MIN, MAX, board)
         if best_move:
             return PlayResult(best_move, None)
         else:
