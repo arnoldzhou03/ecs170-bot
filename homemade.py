@@ -203,7 +203,7 @@ def get_piece_value(piece):
     }
     return values[piece.piece_type] if piece.color == chess.WHITE else -values[piece.piece_type]
 
-max_depth = 4
+max_depth = 3
 
 # Use this logger variable to print messages to the console or log files.
 # logger.info("message") will always print "message" to the console or log file.
